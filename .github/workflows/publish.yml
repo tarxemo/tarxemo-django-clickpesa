@@ -11,6 +11,8 @@ jobs:
   build-n-publish:
     name: Build and publish to PyPI
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Mandatory for trusted publishing
     steps:
     - uses: actions/checkout@v3
     
