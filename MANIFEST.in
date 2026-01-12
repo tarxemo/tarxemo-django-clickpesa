@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+recursive-include clickpesa/templates *
+recursive-include clickpesa/static *
+recursive-include clickpesa/migrations *
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]

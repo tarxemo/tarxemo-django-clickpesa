@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tarxemo-django-clickpesa"
+version = "0.1.0"
+authors = [
+  { name="TarXemo" },
+]
+description = "A Django library for integrating ClickPesa mobile money and payout services"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Framework :: Django",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "Django>=3.2",
+    "requests>=2.25.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/tarxemo/tarxemo-django-clickpesa"
+"Bug Tracker" = "https://github.com/tarxemo/tarxemo-django-clickpesa/issues"
