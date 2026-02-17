@@ -4,7 +4,89 @@ Django admin configuration for ClickPesa payment models.
 
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import AuthToken, PaymentTransaction, PayoutTransaction
+from .models import (
+    AuthToken, PaymentTransaction, PayoutTransaction, 
+    Wallet, WalletTransaction, EscrowTransaction
+)
+
+
+class WalletTransactionInline(admin.TabularInline):
+    model = WalletTransaction
+    extra = 0
+    readonly_fields = [
+        'transaction_type', 'amount', 'currency', 'status', 
+        'reference', 'created_at'
+    ]
+    can_delete = False
+    ordering = ['-created_at']
+
+    def has_add_permission(self, request, obj):
+        return False
+
+
+@admin.register(Wallet)
+class WalletAdmin(admin.ModelAdmin):
+    list_display = ['user', 'balance', 'currency', 'total_earned', 'is_active', 'last_transaction_at']
+    list_filter = ['is_active', 'currency']
+    search_fields = ['user__username', 'user__email']
+    readonly_fields = ['balance', 'total_earned', 'total_spent', 'created_at', 'updated_at', 'last_transaction_at']
+    inlines = [WalletTransactionInline]
+
+
+@admin.register(WalletTransaction)
+class WalletTransactionAdmin(admin.ModelAdmin):
+    list_display = ['reference', 'wallet_user', 'transaction_type', 'amount_display', 'status_badge', 'created_at']
+    list_filter = ['transaction_type', 'status', 'created_at']
+    search_fields = ['reference', 'wallet__user__username', 'description']
+    readonly_fields = [
+        'wallet', 'transaction_type', 'amount', 'currency', 'status', 
+        'reference', 'description', 'metadata', 'balance_before', 
+        'balance_after', 'content_type', 'object_id', 'clickpesa_payment', 
+        'clickpesa_payout', 'created_at', 'completed_at'
+    ]
+
+    def wallet_user(self, obj):
+        return obj.wallet.user
+    
+    def amount_display(self, obj):
+        return f"{obj.amount} {obj.currency}"
+
+    def status_badge(self, obj):
+        colors = {
+            'COMPLETED': 'green',
+            'PENDING': 'orange',
+            'FAILED': 'red',
+            'REVERSED': 'purple',
+        }
+        color = colors.get(obj.status, 'gray')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 2px 8px; border-radius: 3px;">{}</span>',
+            color, obj.status
+        )
+
+
+@admin.register(EscrowTransaction)
+class EscrowTransactionAdmin(admin.ModelAdmin):
+    list_display = ['source_object', 'status_badge', 'amount', 'seller_receives', 'auto_release_date', 'held_at']
+    list_filter = ['status', 'held_at']
+    readonly_fields = [
+        'content_type', 'object_id', 'source_object', 'amount', 'currency', 
+        'status', 'platform_fee', 'seller_receives', 'release_trigger', 
+        'auto_release_date', 'held_at', 'released_at', 'metadata'
+    ]
+
+    def status_badge(self, obj):
+        colors = {
+            'HELD': 'orange',
+            'RELEASED': 'green',
+            'REFUNDED': 'blue',
+            'DISPUTED': 'red',
+        }
+        color = colors.get(obj.status, 'gray')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 2px 8px; border-radius: 3px;">{}</span>',
+            color, obj.status
+        )
 
 
 @admin.register(AuthToken)
@@ -47,7 +129,7 @@ class PaymentTransactionAdmin(admin.ModelAdmin):
         'id', 'order_reference', 'payment_reference', 'status', 'channel',
         'channel_provider', 'collected_amount', 'collected_currency',
         'customer_name', 'customer_phone', 'customer_email', 'message',
-        'raw_response', 'created_at', 'updated_at', 'completed_at', 'user'
+        'metadata', 'raw_response', 'created_at', 'updated_at', 'completed_at', 'user'
     ]
     ordering = ['-created_at']
     date_hierarchy = 'created_at'
@@ -63,7 +145,7 @@ class PaymentTransactionAdmin(admin.ModelAdmin):
             'fields': ('customer_name', 'customer_phone', 'customer_email', 'user')
         }),
         ('Additional Info', {
-            'fields': ('message', 'raw_response')
+            'fields': ('message', 'metadata', 'raw_response')
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at', 'completed_at')
@@ -139,7 +221,7 @@ class PayoutTransactionAdmin(admin.ModelAdmin):
         'exchanged', 'source_currency', 'target_currency', 'source_amount',
         'exchange_rate', 'beneficiary_account_number', 'beneficiary_account_name',
         'beneficiary_mobile_number', 'beneficiary_email', 'beneficiary_swift_number',
-        'beneficiary_routing_number', 'notes', 'raw_response', 'created_at',
+        'beneficiary_routing_number', 'notes', 'metadata', 'raw_response', 'created_at',
         'updated_at', 'completed_at', 'user'
     ]
     ordering = ['-created_at']
@@ -164,7 +246,7 @@ class PayoutTransactionAdmin(admin.ModelAdmin):
             )
         }),
         ('Additional Info', {
-            'fields': ('notes', 'user', 'raw_response')
+            'fields': ('notes', 'user', 'metadata', 'raw_response')
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at', 'completed_at')

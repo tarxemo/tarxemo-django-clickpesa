@@ -8,6 +8,6 @@ class BhumwiPaymentsConfig(AppConfig):
 
     def ready(self):
         """
-        Import signals or perform app initialization here if needed.
+        Import signals and handlers here.
         """
-        pass
+        import clickpesa.handlers

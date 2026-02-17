@@ -10,72 +10,74 @@ from django.views.decorators.http import require_POST
 from django.conf import settings
 from .managers.payment_manager import PaymentManager
 from .managers.payout_manager import PayoutManager
-from .utils.checksum import verify_webhook_signature
+from .utils.checksum import verify_webhook_signature, verify_webhook_ip
 
 logger = logging.getLogger(__name__)
+
+def _get_client_ip(request):
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    return ip
 
 @csrf_exempt
 @require_POST
 def payment_callback(request):
     """
     Handle ClickPesa payment status callbacks.
-    Endpoint: /api/payments/callback/payment/
     """
-    try:
-        # Verify signature if configured
-        if hasattr(settings, 'CLICKPESA_CHECKSUM_SECRET') and settings.CLICKPESA_CHECKSUM_SECRET:
-            # Note: ClickPesa puts signature in specific header. 
-            # Implement verification logic here if header format is known.
-            pass
+    # 1. IP Verification
+    allowed_ips = getattr(settings, 'CLICKPESA_WEBHOOK_VERIFY_IPS', [])
+    if allowed_ips and not verify_webhook_ip(_get_client_ip(request), allowed_ips):
+        logger.warning(f"Unauthorized Webhook IP: {_get_client_ip(request)}")
+        return HttpResponse(status=403)
 
+    try:
         data = json.loads(request.body)
         logger.info(f"Received payment callback: {data}")
         
-        # Extract order reference
-        # Payload format typically has 'orderReference' or 'reference'
+        # 2. Signature Verification (if secret configured)
+        secret = getattr(settings, 'CLICKPESA_CHECKSUM_SECRET', None)
+        signature = request.headers.get('X-ClickPesa-Signature')
+        if secret and signature and not verify_webhook_signature(data, signature, secret):
+            logger.warning("Invalid Webhook Signature")
+            return HttpResponse(status=401)
+
         order_reference = data.get('orderReference', data.get('reference'))
-        
         if not order_reference:
-            logger.warning("Callback received without order reference")
-            return JsonResponse({'error': 'Missing order reference'}, status=400)
+            return JsonResponse({'error': 'Missing reference'}, status=400)
             
-        try:
-            # Use PaymentManager to verify status and update transaction
-            # This will trigger the payment_status_changed signal
-            # which bhumwi_bookings.receivers listens to.
-            manager = PaymentManager()
-            payment = manager.check_payment_status(order_reference)
-            
-            return JsonResponse({
-                'status': 'received',
-                'order_reference': payment.order_reference,
-                'payment_status': payment.status
-            })
-            
-        except Exception as e:
-            logger.error(f"Error updating payment from callback: {str(e)}")
-            # Return 200 OK because we received the callback successfully, 
-            # even if processing logic had an error (e.g. signal error)
-            # This prevents ClickPesa from retrying endlessly if it's a logic bug.
-            return JsonResponse({'status': 'processed_with_error', 'message': str(e)})
+        manager = PaymentManager()
+        manager.check_payment_status(order_reference)
+        return JsonResponse({'status': 'received'})
         
-    except json.JSONDecodeError:
-        return JsonResponse({'error': 'Invalid JSON'}, status=400)
     except Exception as e:
         logger.error(f"Error processing payment callback: {str(e)}")
-        return JsonResponse({'error': 'Internal Server Error'}, status=500)
+        return JsonResponse({'status': 'error', 'message': str(e)})
 
 @csrf_exempt
 @require_POST
 def payout_callback(request):
     """
     Handle ClickPesa payout status callbacks.
-    Endpoint: /api/payments/callback/payout/
     """
+    allowed_ips = getattr(settings, 'CLICKPESA_WEBHOOK_VERIFY_IPS', [])
+    if allowed_ips and not verify_webhook_ip(_get_client_ip(request), allowed_ips):
+        return HttpResponse(status=403)
+
     try:
         data = json.loads(request.body)
         logger.info(f"Received payout callback: {data}")
+        
+        order_reference = data.get('orderReference', data.get('reference'))
+        if not order_reference:
+            return JsonResponse({'error': 'Missing reference'}, status=400)
+
+        manager = PayoutManager()
+        manager.check_payout_status(order_reference)
         return JsonResponse({'status': 'received'})
     except Exception as e:
         logger.error(f"Error processing payout callback: {str(e)}")
-        return JsonResponse({'error': 'Internal Server Error'}, status=500)
+        return JsonResponse({'status': 'error', 'message': str(e)})

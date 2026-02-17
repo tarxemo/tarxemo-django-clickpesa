@@ -6,6 +6,11 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.core.validators import MinValueValidator
+from decimal import Decimal
+
 from .constants import (
     PaymentStatus, PayoutStatus, PaymentChannel, 
     Currency, TOKEN_VALIDITY_HOURS
@@ -103,6 +108,7 @@ class PaymentTransaction(models.Model):
     
     # Additional info
     message = models.TextField(blank=True, null=True, help_text="Status message")
+    metadata = models.JSONField(default=dict, blank=True, help_text="Additional project-specific metadata")
     raw_response = models.JSONField(blank=True, null=True, help_text="Full API response")
     
     # Timestamps
@@ -188,6 +194,7 @@ class PayoutTransaction(models.Model):
     
     # Additional info
     notes = models.TextField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True, help_text="Additional project-specific metadata")
     raw_response = models.JSONField(blank=True, null=True, help_text="Full API response")
     
     # Timestamps
@@ -234,3 +241,198 @@ class PayoutTransaction(models.Model):
     def is_reversed(self):
         """Check if payout was reversed."""
         return self.status in [PayoutStatus.REVERSED.value, PayoutStatus.REFUNDED.value]
+
+class Wallet(models.Model):
+    """
+    User wallet for holding funds.
+    Generic implementation that links to AUTH_USER_MODEL.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='clickpesa_wallet'
+    )
+    
+    balance = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text="Available balance"
+    )
+    
+    currency = models.CharField(
+        max_length=3,
+        default='TZS',
+        choices=[
+            ('TZS', 'Tanzanian Shilling'),
+            ('USD', 'US Dollar'),
+        ]
+    )
+    
+    is_active = models.BooleanField(default=True)
+    
+    total_earned = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total lifetime earnings"
+    )
+    
+    total_spent = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="Total lifetime spending"
+    )
+    
+    last_transaction_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'clickpesa_wallets'
+        indexes = [
+            models.Index(fields=['user']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.user} Wallet ({self.balance} {self.currency})"
+
+    def can_withdraw(self, amount):
+        return self.is_active and self.balance >= Decimal(str(amount))
+
+    def get_escrow_balance(self):
+        """Calculate total funds held in escrow for this user (as a customer)"""
+        return EscrowTransaction.objects.filter(
+            status='HELD',
+            # We assume the 'source' for customer escrow is something they created
+            # This might need project-specific logic, but we provide a helper
+        ).aggregate(total=models.Sum('amount'))['total'] or Decimal('0.00')
+
+
+class WalletTransaction(models.Model):
+    """
+    Audit trail for wallet transactions.
+    Uses GenericForeignKey to link to project-specific related objects (e.g. Orders).
+    """
+    TRANSACTION_TYPES = [
+        ('DEPOSIT', 'Deposit'),
+        ('WITHDRAWAL', 'Withdrawal'),
+        ('ESCROW_HOLD', 'Escrow Hold'),
+        ('ESCROW_RELEASE', 'Escrow Release'),
+        ('REFUND', 'Refund'),
+        ('FEE', 'Platform Fee'),
+        ('COMMISSION', 'Commission'),
+    ]
+    
+    TRANSACTION_STATUS = [
+        ('PENDING', 'Pending'),
+        ('COMPLETED', 'Completed'),
+        ('FAILED', 'Failed'),
+        ('REVERSED', 'Reversed'),
+    ]
+
+    wallet = models.ForeignKey(
+        Wallet,
+        on_delete=models.CASCADE,
+        related_name='transactions'
+    )
+    
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='TZS')
+    status = models.CharField(max_length=20, choices=TRANSACTION_STATUS, default='PENDING')
+    reference = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    
+    balance_before = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    
+    # Generic relation to related object (e.g. Order, Subscription)
+    content_type = models.ForeignKey(ContentType, on_delete=models.SET_NULL, null=True, blank=True)
+    object_id = models.CharField(max_length=255, null=True, blank=True)
+    related_object = GenericForeignKey('content_type', 'object_id')
+    
+    # Internal ClickPesa relations
+    clickpesa_payment = models.ForeignKey(
+        PaymentTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='wallet_transactions'
+    )
+    clickpesa_payout = models.ForeignKey(
+        PayoutTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='wallet_transactions'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'clickpesa_wallet_transactions'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['reference']),
+            models.Index(fields=['transaction_type']),
+            models.Index(fields=['status']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            import uuid
+            self.reference = f"W-TXN-{uuid.uuid4().hex[:8].upper()}"
+        super().save(*args, **kwargs)
+
+
+class EscrowTransaction(models.Model):
+    """
+    Generic Escrow holding.
+    """
+    ESCROW_STATUS = [
+        ('HELD', 'Held'),
+        ('RELEASED', 'Released'),
+        ('REFUNDED', 'Refunded'),
+        ('DISPUTED', 'Disputed'),
+    ]
+    
+    # Generic relation to the primary object (e.g. Order)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.CharField(max_length=255)
+    source_object = GenericForeignKey('content_type', 'object_id')
+
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, default='TZS')
+    status = models.CharField(max_length=20, choices=ESCROW_STATUS, default='HELD')
+    
+    platform_fee = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    seller_receives = models.DecimalField(max_digits=12, decimal_places=2)
+    
+    release_trigger = models.CharField(max_length=50, null=True, blank=True)
+    auto_release_date = models.DateTimeField(null=True, blank=True)
+    
+    held_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = 'clickpesa_escrow_transactions'
+        unique_together = ('content_type', 'object_id')
+        indexes = [
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['status']),
+            models.Index(fields=['auto_release_date']),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.seller_receives:
+            self.seller_receives = self.amount - self.platform_fee
+        super().save(*args, **kwargs)

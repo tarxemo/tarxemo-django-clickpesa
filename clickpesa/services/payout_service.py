@@ -36,7 +36,8 @@ class PayoutService:
         amount: float,
         phone_number: str,
         currency: str,
-        order_reference: str
+        order_reference: str,
+        channel: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Preview mobile money payout.
@@ -84,6 +85,9 @@ class PayoutService:
             'orderReference': validated_reference
         }
         
+        if channel:
+            payload['channel'] = channel
+        
         # Add checksum if enabled
         if config.enable_checksum:
             payload['checksum'] = generate_checksum(payload, config.checksum_secret)
@@ -111,7 +115,8 @@ class PayoutService:
         amount: float,
         phone_number: str,
         currency: str,
-        order_reference: str
+        order_reference: str,
+        channel: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create mobile money payout.
