@@ -38,6 +38,7 @@ class WalletTransactionType(DjangoObjectType):
     balance_after = graphene.String()
     related_object_id = graphene.String()
     related_object_type = graphene.String()
+    related_order_number = graphene.String()
 
     class Meta:
         model = WalletTransaction
@@ -62,6 +63,13 @@ class WalletTransactionType(DjangoObjectType):
     def resolve_related_object_type(self, info):
         return str(self.content_type.model) if self.content_type else None
 
+    def resolve_related_order_number(self, info):
+        """Try to get order number from related object"""
+        obj = self.related_object
+        if obj:
+            return getattr(obj, 'order_number', None)
+        return None
+
 
 class EscrowTransactionType(DjangoObjectType):
     """Escrow transaction GraphQL type"""
@@ -70,6 +78,7 @@ class EscrowTransactionType(DjangoObjectType):
     seller_receives = graphene.String()
     source_object_id = graphene.String()
     source_object_type = graphene.String()
+    order_number = graphene.String()
 
     class Meta:
         model = EscrowTransaction
@@ -93,6 +102,13 @@ class EscrowTransactionType(DjangoObjectType):
 
     def resolve_source_object_type(self, info):
         return str(self.content_type.model)
+
+    def resolve_order_number(self, info):
+        """Try to get order number from source object"""
+        obj = self.source_object
+        if obj:
+            return getattr(obj, 'order_number', None)
+        return None
 
 
 # DTOs for responses
