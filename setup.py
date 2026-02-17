@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="tarxemo-django-clickpesa",
-    version="0.2.0",
+    version="0.2.1",
     author="TarXemo",
     description="A Django library for integrating ClickPesa mobile money and payout services",
     long_description=long_description,

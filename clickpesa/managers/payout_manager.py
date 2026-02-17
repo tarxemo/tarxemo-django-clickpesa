@@ -33,7 +33,8 @@ class PayoutManager:
         order_reference: str,
         currency: str = Currency.TZS.value,
         preview_first: bool = True,
-        user=None
+        user=None,
+        channel: str = None
     ) -> PayoutTransaction:
         """
         Create a new payout transaction.
@@ -70,7 +71,8 @@ class PayoutManager:
                     amount=amount,
                     phone_number=phone_number,
                     currency=currency,
-                    order_reference=order_reference
+                    order_reference=order_reference,
+                    channel=channel
                 )
                 logger.info(f"Payout preview completed for order: {order_reference}")
                 
@@ -89,7 +91,8 @@ class PayoutManager:
                 amount=amount,
                 phone_number=phone_number,
                 currency=currency,
-                order_reference=order_reference
+                order_reference=order_reference,
+                channel=channel
             )
         except Exception as e:
             logger.error(f"Payout creation failed: {str(e)}")
