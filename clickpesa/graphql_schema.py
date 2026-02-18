@@ -186,7 +186,8 @@ class InitiateWalletDeposit(graphene.Mutation):
             pm = PaymentManager()
             
             # Generate unique reference
-            order_reference = f"W-DEP-{user.id}-{uuid.uuid4().hex[:8].upper()}"
+            user_suffix = str(user.id).replace('-', '')[-6:]
+            order_reference = f"WDEP{user_suffix}{uuid.uuid4().hex[:8].upper()}"
             
             # Create payment with metadata
             payment = pm.create_payment(
