@@ -13,6 +13,7 @@ from ..exceptions import PayoutError, DuplicateOrderReferenceError
 from ..models import PayoutTransaction
 from ..services.payout_service import PayoutService
 from ..utils.formatters import parse_clickpesa_amount
+from ..signals import payout_status_changed
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,16 @@ class PayoutManager:
                     f"Payout transaction created. "
                     f"Order: {order_reference}, ID: {payout.id}"
                 )
+                
+                # Emit signal
+                payout_status_changed.send(
+                    sender=PayoutTransaction,
+                    instance=payout,
+                    created=True,
+                    new_status=payout.status,
+                    old_status=None
+                )
+                
                 return payout
         
         except Exception as e:
@@ -177,6 +188,7 @@ class PayoutManager:
         
         # Update payout record
         try:
+            old_status = payout.status
             with transaction.atomic():
                 payout.status = response.get('status', payout.status)
                 payout.transfer_type = response.get('transferType')
@@ -202,6 +214,17 @@ class PayoutManager:
                     f"Payout status updated. "
                     f"Order: {order_reference}, Status: {payout.status}"
                 )
+                
+                # Emit signal if status changed
+                if old_status != payout.status:
+                    payout_status_changed.send(
+                        sender=PayoutTransaction,
+                        instance=payout,
+                        created=False,
+                        new_status=payout.status,
+                        old_status=old_status
+                    )
+                
                 return payout
         
         except Exception as e:
