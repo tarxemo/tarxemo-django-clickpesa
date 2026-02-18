@@ -59,6 +59,23 @@ class WalletQuery(graphene.ObjectType):
         if status:
             qs = qs.filter(status=status)
             
+        # Optimization: Check for pending withdrawals and update them if needed
+        # This acts as a lazy reconciliation when the user views their transactions.
+        pending_withdrawals = qs.filter(
+            transaction_type='WITHDRAWAL', 
+            status='PENDING',
+            clickpesa_payout__isnull=False
+        )
+        
+        if pending_withdrawals.exists():
+            pm = PayoutManager()
+            for txn in pending_withdrawals:
+                try:
+                    # We use the transaction reference as the order reference
+                    payout = pm.check_payout_status(txn.reference)
+                except Exception as e:
+                    logger.error(f"Failed to auto-refresh payout for txn {txn.id}: {e}")
+            
         paginator = Paginator(qs, items_per_page)
         page_obj = paginator.get_page(page_number)
         

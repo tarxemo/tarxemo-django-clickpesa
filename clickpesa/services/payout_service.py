@@ -241,6 +241,10 @@ class PayoutService:
                 headers=headers
             )
             
+            # Handle list response (API returns [{...}])
+            if isinstance(response, list) and len(response) > 0:
+                response = response[0]
+            
             logger.info(
                 f"Payout status retrieved. "
                 f"Order: {order_reference}, Status: {response.get('status')}"
