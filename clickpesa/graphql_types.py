@@ -115,6 +115,9 @@ class EscrowTransactionType(DjangoObjectType):
 class WalletSingleDTO(BaseResponseDTO):
     data = graphene.Field(WalletType)
 
+class WalletTransactionSingleDTO(BaseResponseDTO):
+    data = graphene.Field(WalletTransactionType)
+
 class WalletTransactionListDTO(BaseResponseDTO):
     data = graphene.List(WalletTransactionType)
 

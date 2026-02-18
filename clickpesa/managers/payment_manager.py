@@ -34,7 +34,8 @@ class PaymentManager:
         order_reference: str,
         currency: str = Currency.TZS.value,
         preview_first: bool = True,
-        user=None
+        user=None,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> PaymentTransaction:
         """
         Create a new payment transaction.
@@ -47,6 +48,7 @@ class PaymentManager:
             currency: Currency code (default: TZS)
             preview_first: Whether to preview before initiating
             user: User instance (optional)
+            metadata: Additional metadata (optional)
             
         Returns:
             PaymentTransaction instance
@@ -114,7 +116,8 @@ class PaymentManager:
                     collected_currency=response.get('collectedCurrency', currency),
                     customer_phone=phone_number,
                     raw_response=response,
-                    user=user
+                    user=user,
+                    metadata=metadata or {}
                 )
                 
                 logger.info(

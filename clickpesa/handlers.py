@@ -34,6 +34,19 @@ def handle_clickpesa_payment_status(sender, instance, new_status, old_status=Non
         logger.warning(f"PaymentTransaction {instance.id} has no associated user. Cannot hold escrow.")
         return
 
+    metadata = instance.metadata or {}
+    
+    # Check if this is a direct wallet deposit
+    if metadata.get('transaction_type') == 'WALLET_DEPOSIT':
+        wm.deposit(
+            wallet=WalletManager.get_or_create_wallet(instance.user),
+            amount=instance.collected_amount,
+            transaction_type='DEPOSIT',
+            description=f"Wallet deposit via {instance.channel}",
+            metadata={'clickpesa_payment_id': instance.id}
+        )
+        return
+
     wm = WalletManager()
     with transaction.atomic():
         # Calculate platform fee (can be passed via metadata or library settings)
@@ -49,20 +62,20 @@ def handle_clickpesa_payment_status(sender, instance, new_status, old_status=Non
         # But usually, it should be linked to the Order.
         # We can look for 'source_content_type' and 'source_object_id' in instance.metadata
         
-        metadata = instance.raw_response or {}
-        # metadata = instance.metadata  # If we had a metadata field on PaymentTransaction
-        # Wait, PaymentTransaction does have order_reference.
-        
-        # Plan: Create escrow hold.
-        # If the project wants to link it to an Order, they can do so in their own signals,
-        # OR we provide a way to pass the related object.
-        
-        # Let's check how the library currently handles metadata.
-        # clickpesa/models.py: PaymentTransaction has raw_response (JSONField)
-        
         # Optimization: We'll link the escrow to the PaymentTransaction as a fallback.
+        # Try to resolve source object from metadata
+        source_object = instance
+        try:
+            if 'source_content_type' in metadata and 'source_object_id' in metadata:
+                from django.contrib.contenttypes.models import ContentType
+                app_label, model = metadata['source_content_type'].split('.')
+                ct = ContentType.objects.get(app_label=app_label, model=model)
+                source_object = ct.get_object_for_this_type(id=metadata['source_object_id'])
+        except Exception:
+            pass
+
         wm.hold_escrow(
-            source_object=instance, # Fallback to payment itself
+            source_object=source_object,
             amount=instance.collected_amount,
             platform_fee=fee,
             metadata={'clickpesa_payment_id': instance.id}

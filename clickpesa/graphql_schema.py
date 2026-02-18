@@ -1,12 +1,20 @@
 import graphene
 from clickpesa.graphql_types import (
     WalletSingleDTO, WalletTransactionListDTO, EscrowTransactionListDTO,
-    WalletType, WalletTransactionType
+    WalletType, WalletTransactionType, WalletTransactionSingleDTO
 )
-from clickpesa.models import Wallet, WalletTransaction, EscrowTransaction
+from clickpesa.managers.payment_manager import PaymentManager
+from clickpesa.models import Wallet, WalletTransaction, EscrowTransaction, PaymentTransaction
 from clickpesa.managers.wallet_manager import WalletManager
 from tarxemo_django_graphene_utils import build_success_response, build_error_response
 from django.core.paginator import Paginator
+from django.db import transaction
+from clickpesa.managers.payout_manager import PayoutManager
+from clickpesa.exceptions import InsufficientBalanceError, PayoutError
+import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WalletQuery(graphene.ObjectType):
     my_wallet = graphene.Field(WalletSingleDTO)
@@ -74,11 +82,6 @@ class WalletQuery(graphene.ObjectType):
         
         return EscrowTransactionListDTO(response=build_success_response(), data=page_obj.object_list)
 
-
-from django.db import transaction
-from clickpesa.managers.payout_manager import PayoutManager
-from clickpesa.exceptions import InsufficientBalanceError, PayoutError
-
 class WithdrawToMobileMoney(graphene.Mutation):
     """
     Withdraw funds from wallet to mobile money account.
@@ -89,13 +92,13 @@ class WithdrawToMobileMoney(graphene.Mutation):
         channel = graphene.String()
 
     # We return a single transaction or the updated wallet
-    Output = WalletSingleDTO
+    Output = WalletTransactionSingleDTO
 
     @staticmethod
     def mutate(root, info, amount, phone_number, channel=None):
         user = info.context.user
         if not user.is_authenticated:
-            return WalletSingleDTO(response=build_error_response("Authentication required"), data=None)
+            return WalletTransactionSingleDTO(response=build_error_response("Authentication required"), data=None)
         
         try:
             # Format phone
@@ -104,13 +107,13 @@ class WithdrawToMobileMoney(graphene.Mutation):
             # Get wallet
             wallet = Wallet.objects.filter(user=user).first()
             if not wallet:
-                return WalletSingleDTO(response=build_error_response("Wallet not found"), data=None)
+                return WalletTransactionSingleDTO(response=build_error_response("Wallet not found"), data=None)
 
             if amount <= 0:
-                return WalletSingleDTO(response=build_error_response("Amount must be > 0"), data=None)
+                return WalletTransactionSingleDTO(response=build_error_response("Amount must be > 0"), data=None)
 
             if wallet.balance < amount:
-                return WalletSingleDTO(response=build_error_response(f"Insufficient balance: {wallet.balance}"), data=None)
+                return WalletTransactionSingleDTO(response=build_error_response(f"Insufficient balance: {wallet.balance}"), data=None)
 
             wm = WalletManager()
             pm = PayoutManager()
@@ -141,15 +144,76 @@ class WithdrawToMobileMoney(graphene.Mutation):
                 txn.status = 'PENDING'
                 txn.save(update_fields=['clickpesa_payout', 'status'])
 
-            return WalletSingleDTO(
+            return WalletTransactionSingleDTO(
                 response=build_success_response("Withdrawal initiated successfully"),
-                data=wallet
+                data=txn
             )
 
         except Exception as e:
             logger.error(f"Withdrawal failed: {str(e)}")
-            return WalletSingleDTO(response=build_error_response(str(e)), data=None)
+            return WalletTransactionSingleDTO(response=build_error_response(str(e)), data=None)
 
+class InitiateWalletDeposit(graphene.Mutation):
+    """
+    Initiate a mobile money payment to deposit funds into the wallet.
+    """
+    class Arguments:
+        amount = graphene.Decimal(required=True)
+        phone_number = graphene.String(required=True)
+    
+    # Return the payment transaction details
+    # We'll use a generic response structure or return the payment ID/Reference
+    class Output(graphene.ObjectType):
+        response = graphene.Field("tarxemo_django_graphene_utils.BaseResponseDTO")
+        payment_reference = graphene.String()
+        order_reference = graphene.String()
+
+    @staticmethod
+    def mutate(root, info, amount, phone_number):
+        user = info.context.user
+        if not user.is_authenticated:
+            from tarxemo_django_graphene_utils import BaseResponseDTO
+            return InitiateWalletDeposit.Output(
+                response=BaseResponseDTO(success=False, message="Authentication required"),
+                payment_reference=None,
+                order_reference=None
+            )
+        
+        try:
+            # Format phone
+            phone_number = phone_number.replace('+', '').strip()
+            
+            pm = PaymentManager()
+            
+            # Generate unique reference
+            order_reference = f"W-DEP-{user.id}-{uuid.uuid4().hex[:8].upper()}"
+            
+            # Create payment with metadata
+            payment = pm.create_payment(
+                amount=float(amount),
+                phone_number=phone_number,
+                order_reference=order_reference,
+                currency=Wallet.objects.filter(user=user).first().currency if hasattr(user, 'clickpesa_wallet') else 'TZS',
+                preview_first=False, # Direct initiation for better UX
+                user=user,
+                metadata={'transaction_type': 'WALLET_DEPOSIT'}
+            )
+            
+            from tarxemo_django_graphene_utils import BaseResponseDTO
+            return InitiateWalletDeposit.Output(
+                response=BaseResponseDTO(success=True, message="Deposit initiated. Please check your phone."),
+                payment_reference=payment.id,
+                order_reference=payment.order_reference
+            )
+            
+        except Exception as e:
+            from tarxemo_django_graphene_utils import BaseResponseDTO
+            return InitiateWalletDeposit.Output(
+                response=BaseResponseDTO(success=False, message=str(e)),
+                payment_reference=None,
+                order_reference=None
+            )
 
 class WalletMutations(graphene.ObjectType):
     withdraw_to_mobile_money = WithdrawToMobileMoney.Field()
+    initiate_wallet_deposit = InitiateWalletDeposit.Field()
